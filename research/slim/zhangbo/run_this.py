@@ -10,8 +10,6 @@ import numpy as np
 import os,sys
 from six.moves import cPickle
 tf.app.flags.DEFINE_string("input_dir", default="/home/zhangbo/data/cifar-10-batches-py/", help="input-dir")
-
-
 FLAGS = tf.app.flags.FLAGS
 _IMAGE_SIZE = 32
 _CLASS_NAMES = [
