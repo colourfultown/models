@@ -13,7 +13,7 @@ import os,sys
 
 flags = tf.app.flags
 flags.DEFINE_string("input_dir", default="/home/zhangbo/data/cifar-10-batches-py/", help="input-dir")
-flags.DEFINE_integer("batch_size", default=8, help="batch-size")
+flags.DEFINE_integer("batch_size", default=32, help="batch-size")
 
 FLAGS = flags.FLAGS
 
@@ -64,7 +64,7 @@ def get_tuned_variables():
 def read_tfrecord_tf():
     input_dir = FLAGS.input_dir
     batch_size = FLAGS.batch_size
-    files = tf.train.match_filenames_once(input_dir + '/train.tfrecord')
+    files = tf.train.match_filenames_once(input_dir + 'train_v2.tfrecord')
     filename_qu = tf.train.string_input_producer(files, shuffle=True, num_epochs=1)
     reader = tf.TFRecordReader()
     _, serialized_example = reader.read(filename_qu)
@@ -81,7 +81,7 @@ def read_tfrecord_tf():
     img = tf.cast(img, tf.float32) * (1.0 / 255) - 0.5
     label = tf.cast(features['image/class/label'], tf.int64)
     imgs, labels = tf.train.shuffle_batch([img, label], batch_size=batch_size, num_threads=10,
-                                          capacity=2000 + 10 * batch_size, min_after_dequeue=2000)
+                                          capacity=10 * batch_size, min_after_dequeue=200)
     return imgs, labels
 
 def read_tfrecord_slim():
@@ -147,7 +147,7 @@ def read_tfrecord_slim():
     return images, labels
 
 def main(_):
-    CKPT_FILE = "./model/abc.ckpt"
+    CKPT_FILE = "./model/inception_v4.ckpt"
     SAVE_FILE = "./log/inv4.ckpt"
 
     tfimages = tf.placeholder(tf.float32, [None, 299, 299, 3], name='input_images')
@@ -168,7 +168,7 @@ def main(_):
         tf.global_variables_initializer().run()
         tf.local_variables_initializer().run()
         coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(coord=coord)
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         # # 加载谷歌已经训练好的模型。
         print('Loading tuned variables from %s' % CKPT_FILE)
         load_fn(sess)
