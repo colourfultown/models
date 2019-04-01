@@ -201,20 +201,24 @@ def run1():
     with tf.Session(config=config) as sess:
         tf.global_variables_initializer().run()
         tf.local_variables_initializer().run()
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        coord = tf.train.Coordinator()# 开启一个协调器
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord) # 使用start_queue_runners 启动队列填充
         # # 加载谷歌已经训练好的模型。
         print('Loading tuned variables from %s' % CKPT_FILE)
         load_fn(sess)
         STEPS = 10000
-        for i in range(STEPS):
-            trX, trY = sess.run([imgs, labels])
-            _, loss = sess.run([train_step, total_loss], feed_dict={tfimages: trX, tflabels: trY})
-            if i % 300 == 0 or i + 1 == STEPS:
-                saver.save(sess, SAVE_FILE, global_step=i)
-            print("step-{0}-loss-{1}".format(i, loss))
-        coord.request_stop()
-        coord.join(threads)
+        try:
+            for i in range(STEPS):
+                trX, trY = sess.run([imgs, labels])
+                _, loss = sess.run([train_step, total_loss], feed_dict={tfimages: trX, tflabels: trY})
+                if i % 300 == 0 or i + 1 == STEPS:
+                    saver.save(sess, SAVE_FILE, global_step=i)
+                print("step-{0}-loss-{1}".format(i, loss))
+        except tf.errors.OutOfRangeError:
+            print("all-files-end")
+        finally:
+            coord.request_stop()# 协调器coord发出所有线程终止信号
+        coord.join(threads)#把开启的线程加入主线程，等待threads结束
 
 
 def run2():
