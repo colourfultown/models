@@ -50,6 +50,7 @@ N_CLASSES = 10
 CHECKPOINT_EXCLUDE_SCOPES = "InceptionV4/Logits,InceptionV4/AuxLogits"
 
 def get_tuned_variables():
+    # 返回要加载的参数
     exclusions = [scope.strip() for scope in CHECKPOINT_EXCLUDE_SCOPES.split(",")]
     variables_to_restore = []
     for var in slim.get_model_variables():
@@ -226,7 +227,6 @@ def run2():
     tf.losses.softmax_cross_entropy(tf.one_hot(tflabels, N_CLASSES), logits, weights=1.0)
     total_loss = tf.losses.get_total_loss()
     train_step = tf.train.RMSPropOptimizer(0.0001).minimize(total_loss)
-    imgs, labels = read_tfrecord_tf()
     load_fn = slim.assign_from_checkpoint_fn(CKPT_FILE, get_tuned_variables(), ignore_missing_vars=True)
     # 定义保存新模型的Saver。
     saver = tf.train.Saver()
@@ -235,6 +235,7 @@ def run2():
     with tf.Session(config=config) as sess:
         tf.global_variables_initializer().run()
         tf.local_variables_initializer().run()
+        load_fn(sess)
         step = 0
         try:
             while True:
@@ -250,7 +251,7 @@ def run2():
 
 
 def main(_):
-    run1()
+    run2()
 
 
 if __name__ == "__main__":
