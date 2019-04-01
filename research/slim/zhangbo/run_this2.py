@@ -14,6 +14,7 @@ import os,sys
 flags = tf.app.flags
 flags.DEFINE_string("input_dir", default="/home/zhangbo/data/cifar-10-batches-py/", help="input-dir")
 flags.DEFINE_integer("batch_size", default=32, help="batch-size")
+flags.DEFINE_integer("epoch", default=1, help="epoch")
 
 FLAGS = flags.FLAGS
 
@@ -64,8 +65,8 @@ def get_tuned_variables():
 def read_tfrecord_tf():
     input_dir = FLAGS.input_dir
     batch_size = FLAGS.batch_size
-    files = tf.train.match_filenames_once(input_dir + 'train_v2.tfrecord')
-    filename_qu = tf.train.string_input_producer(files, shuffle=True, num_epochs=1)
+    files = tf.train.match_filenames_once(input_dir + 'train_v2.tfrecord') #可以输入一个list
+    filename_qu = tf.train.string_input_producer(files, shuffle=True, num_epochs=1) #生成文件名队列
     reader = tf.TFRecordReader()
     _, serialized_example = reader.read(filename_qu)
     features = tf.parse_single_example(
@@ -146,7 +147,39 @@ def read_tfrecord_slim():
     images, labels = batch_queue.dequeue()
     return images, labels
 
-def main(_):
+def generate_parse_fn():
+    def _sparse_func(example_proto):
+        keys_to_features = {}
+        keys_to_features["image/encoded"] = tf.FixedLenFeature([], tf.string)
+        keys_to_features["image/class/label"] = tf.FixedLenFeature([], tf.int64)
+        features = tf.parse_example(example_proto, keys_to_features)
+        img = features["image/encoded"]
+        img = tf.image.resize_images(img, [299, 299], method=0)
+        img = tf.cast(img, tf.float32) * (1.0 / 255) - 0.5
+        label = tf.cast(features['image/class/label'], tf.int64)
+        return img, label
+    return _sparse_func
+def input_with_dataset():
+    input_dir = FLAGS.input_dir
+    batch_size = FLAGS.batch_size
+    epoch = FLAGS.epoch
+    file_names = [input_dir + 'train_v2.tfrecord']
+    files = tf.convert_to_tensor(file_names, dtype=tf.string)
+    files = tf.reshape(files, [-1], name="flat_filenames")
+    files = tf.data.Dataset.from_tensor_slices(files)
+    dataset = files.apply(tf.contrib.data.parallel_interleave(
+        tf.data.TFRecordDataset,
+        cycle_length=4 * 2))
+    dataset = dataset.shuffle(buffer_size=batch_size * 4)  # 打乱时使用的buffer的大小 什么意思
+    dataset = dataset.prefetch(buffer_size=batch_size)
+    dataset = dataset.repeat(epoch)
+    # dataset = dataset.batch(batch_size)
+    dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
+    _parse_fn = generate_parse_fn()
+    dataset = dataset.map(_parse_fn, num_parallel_calls=4)
+    iterator = dataset.make_one_shot_iterator()
+    return iterator.get_next()
+def run1():
     CKPT_FILE = "./model/inception_v4.ckpt"
     SAVE_FILE = "./log/inv4.ckpt"
 
@@ -174,13 +207,51 @@ def main(_):
         load_fn(sess)
         STEPS = 10000
         for i in range(STEPS):
-            trX, trY =sess.run([imgs, labels])
-            _, loss = sess.run([train_step, total_loss], feed_dict={tfimages:trX,tflabels:trY})
+            trX, trY = sess.run([imgs, labels])
+            _, loss = sess.run([train_step, total_loss], feed_dict={tfimages: trX, tflabels: trY})
             if i % 300 == 0 or i + 1 == STEPS:
                 saver.save(sess, SAVE_FILE, global_step=i)
             print("step-{0}-loss-{1}".format(i, loss))
         coord.request_stop()
         coord.join(threads)
+
+
+def run2():
+    CKPT_FILE = "./model/inception_v4.ckpt"
+    SAVE_FILE = "./log/inv4.ckpt"
+    tfimages, tflabels = input_with_dataset()
+    with slim.arg_scope(inception_v4.inception_v4_arg_scope()):
+        logits, _ = inception_v4.inception_v4(tfimages, num_classes=N_CLASSES, is_training=True)
+
+    tf.losses.softmax_cross_entropy(tf.one_hot(tflabels, N_CLASSES), logits, weights=1.0)
+    total_loss = tf.losses.get_total_loss()
+    train_step = tf.train.RMSPropOptimizer(0.0001).minimize(total_loss)
+    imgs, labels = read_tfrecord_tf()
+    load_fn = slim.assign_from_checkpoint_fn(CKPT_FILE, get_tuned_variables(), ignore_missing_vars=True)
+    # 定义保存新模型的Saver。
+    saver = tf.train.Saver()
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    with tf.Session(config=config) as sess:
+        tf.global_variables_initializer().run()
+        tf.local_variables_initializer().run()
+        step = 0
+        try:
+            while True:
+                _, loss = sess.run([train_step, total_loss])
+                if step % 300 == 0:
+                    saver.save(sess, SAVE_FILE, global_step=step)
+                    print("step-{0}-loss-{1}".format(step, loss))
+                step += 1
+        except tf.errors.OutOfRangeError:
+            print("out of range at step : {0}".format(step))
+        finally:
+            print("train-over")
+
+
+def main(_):
+    run1()
+
 
 if __name__ == "__main__":
     tf.app.run()
