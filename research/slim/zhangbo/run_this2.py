@@ -13,7 +13,7 @@ import os,sys
 
 flags = tf.app.flags
 flags.DEFINE_string("input_dir", default="/home/zhangbo/data/cifar-10-batches-py/", help="input-dir")
-flags.DEFINE_integer("batch_size", default=32, help="batch-size")
+flags.DEFINE_integer("batch_size", default=21, help="batch-size")
 flags.DEFINE_integer("epoch", default=1, help="epoch")
 
 FLAGS = flags.FLAGS
@@ -154,7 +154,9 @@ def generate_parse_fn():
         keys_to_features["image/encoded"] = tf.FixedLenFeature([], tf.string)
         keys_to_features["image/class/label"] = tf.FixedLenFeature([], tf.int64)
         features = tf.parse_example(example_proto, keys_to_features)
-        img = features["image/encoded"]
+        img = tf.decode_raw(features['image/encoded'], tf.uint8)
+        box4 = [-1] + box
+        img = tf.reshape(img, box4)
         img = tf.image.resize_images(img, [299, 299], method=0)
         img = tf.cast(img, tf.float32) * (1.0 / 255) - 0.5
         label = tf.cast(features['image/class/label'], tf.int64)
@@ -165,6 +167,7 @@ def input_with_dataset():
     batch_size = FLAGS.batch_size
     epoch = FLAGS.epoch
     file_names = [input_dir + 'train_v2.tfrecord']
+    _parse_fn = generate_parse_fn()
     files = tf.convert_to_tensor(file_names, dtype=tf.string)
     files = tf.reshape(files, [-1], name="flat_filenames")
     files = tf.data.Dataset.from_tensor_slices(files)
@@ -176,7 +179,7 @@ def input_with_dataset():
     dataset = dataset.repeat(epoch)
     # dataset = dataset.batch(batch_size)
     dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
-    _parse_fn = generate_parse_fn()
+    tf.data.Dataset.batch(dataset, drop_remainder=True)
     dataset = dataset.map(_parse_fn, num_parallel_calls=4)
     iterator = dataset.make_one_shot_iterator()
     return iterator.get_next()
