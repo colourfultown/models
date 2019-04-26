@@ -15,6 +15,7 @@ flags = tf.app.flags
 flags.DEFINE_string("input_dir", default="/home/zhangbo/data/cifar-10-batches-py/", help="input-dir")
 flags.DEFINE_integer("batch_size", default=21, help="batch-size")
 flags.DEFINE_integer("epoch", default=1, help="epoch")
+flags.DEFINE_boolean("if_shuffle", default=True, help="if_shuffle")
 
 FLAGS = flags.FLAGS
 
@@ -48,44 +49,6 @@ labels_to_names = {
 }
 N_CLASSES = 10
 CHECKPOINT_EXCLUDE_SCOPES = "InceptionV4/Logits,InceptionV4/AuxLogits"
-
-def get_tuned_variables():
-    # 返回要加载的参数
-    exclusions = [scope.strip() for scope in CHECKPOINT_EXCLUDE_SCOPES.split(",")]
-    variables_to_restore = []
-    for var in slim.get_model_variables():
-        excluded = False
-        for exclusion in exclusions:
-            if var.op.name.startswith(exclusion):
-                excluded = True
-                break
-        if not excluded:
-            variables_to_restore.append(var)
-    return variables_to_restore
-
-def read_tfrecord_tf():
-    input_dir = FLAGS.input_dir
-    batch_size = FLAGS.batch_size
-    files = tf.train.match_filenames_once(input_dir + 'train_v2.tfrecord') #可以输入一个list
-    filename_qu = tf.train.string_input_producer(files, shuffle=True, num_epochs=1) #生成文件名队列
-    reader = tf.TFRecordReader()
-    _, serialized_example = reader.read(filename_qu)
-    features = tf.parse_single_example(
-        serialized_example,
-        features={
-            'image/encoded': tf.FixedLenFeature([], tf.string),
-            'image/class/label': tf.FixedLenFeature([], tf.int64),
-        }
-    )
-    img = tf.decode_raw(features['image/encoded'], tf.uint8)
-    img = tf.reshape(img, box)
-    img = tf.image.resize_images(img, [299, 299], method=0)
-    img = tf.cast(img, tf.float32) * (1.0 / 255) - 0.5
-    label = tf.cast(features['image/class/label'], tf.int64)
-    imgs, labels = tf.train.shuffle_batch([img, label], batch_size=batch_size, num_threads=10,
-                                          capacity=10 * batch_size, min_after_dequeue=200)
-    return imgs, labels
-
 def read_tfrecord_slim():
     input_dir = FLAGS.input_dir
     batch_size = FLAGS.batch_size
@@ -147,6 +110,50 @@ def read_tfrecord_slim():
     # 组好后的数据
     images, labels = batch_queue.dequeue()
     return images, labels
+def get_tuned_variables():
+    # 返回要加载的参数
+    exclusions = [scope.strip() for scope in CHECKPOINT_EXCLUDE_SCOPES.split(",")]
+    variables_to_restore = []
+    for var in slim.get_model_variables():
+        excluded = False
+        for exclusion in exclusions:
+            if var.op.name.startswith(exclusion):
+                excluded = True
+                break
+        if not excluded:
+            variables_to_restore.append(var)
+    return variables_to_restore
+
+def read_tfrecord_tf(input_file):
+    input_dir = FLAGS.input_dir
+    batch_size = FLAGS.batch_size
+    if_shuffle = FLAGS.if_shuffle
+    files = tf.train.match_filenames_once(os.path.join(input_dir, input_file))
+    #可以输入一个list
+    filename_qu = tf.train.string_input_producer(files, shuffle=True, num_epochs=1) #生成文件名队列
+    reader = tf.TFRecordReader()
+    _, serialized_example = reader.read(filename_qu)
+    features = tf.parse_single_example(
+        serialized_example,
+        features={
+            'image/encoded': tf.FixedLenFeature([], tf.string),
+            'image/class/label': tf.FixedLenFeature([], tf.int64),
+        }
+    )
+    img = tf.decode_raw(features['image/encoded'], tf.uint8)
+    img = tf.reshape(img, box)
+    img = tf.image.resize_images(img, [299, 299], method=0)
+    img = tf.cast(img, tf.float32) * (1.0 / 255) - 0.5
+    label = tf.cast(features['image/class/label'], tf.int64)
+    if if_shuffle:
+        imgs, labels = tf.train.shuffle_batch([img, label], batch_size=batch_size, num_threads=10,
+                                          capacity=10 * batch_size, min_after_dequeue=200)
+    else:
+        imgs, labels = tf.train.batch([img, label], batch_size=batch_size, num_threads=10,
+                                          capacity=10 * batch_size)
+    return imgs, labels
+
+
 
 def generate_parse_fn():
     def _sparse_func(example_proto):
@@ -179,10 +186,10 @@ def input_with_dataset():
     dataset = dataset.repeat(epoch)
     # dataset = dataset.batch(batch_size)
     dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
-    tf.data.Dataset.batch(dataset, drop_remainder=True)
+    # tf.data.Dataset.batch(dataset, drop_remainder=True)
     dataset = dataset.map(_parse_fn, num_parallel_calls=4)
-    iterator = dataset.make_one_shot_iterator()
-    return iterator.get_next()
+    iterator = dataset.make_one_shot_iterator() #定义遍历器
+    return iterator.get_next() #这就是输入数据 相当于placeholder
 def run1():
     CKPT_FILE = "./model/inception_v4.ckpt"
     SAVE_FILE = "./log/inv4.ckpt"
@@ -190,12 +197,18 @@ def run1():
     tfimages = tf.placeholder(tf.float32, [None, 299, 299, 3], name='input_images')
     tflabels = tf.placeholder(tf.int64, [None], name='labels')
     with slim.arg_scope(inception_v4.inception_v4_arg_scope()):
-        logits, _ = inception_v4.inception_v4(tfimages, num_classes=N_CLASSES, is_training=True)
-
+        logits, end_points = inception_v4.inception_v4(tfimages, num_classes=N_CLASSES, is_training=True)
     tf.losses.softmax_cross_entropy(tf.one_hot(tflabels, N_CLASSES), logits, weights=1.0)
     total_loss = tf.losses.get_total_loss()
     train_step = tf.train.RMSPropOptimizer(0.0001).minimize(total_loss)
-    imgs, labels = read_tfrecord_tf()
+    accuracy = tf.reduce_mean(tf.cast(tf.equal(tflabels, tf.argmax(logits, axis=1)), tf.float32), name="accuracy")
+    """tf-summary"""
+    tf.summary.scalar("loss", total_loss)
+    tf.summary.scalar("accuracy", accuracy)
+    tf.summary.histogram("PreLogitsFlatten", end_points["PreLogitsFlatten"])
+    summary_op = tf.summary.merge_all()
+    """"""
+    imgs, labels = read_tfrecord_tf('train_v2.tfrecord')
     load_fn = slim.assign_from_checkpoint_fn(CKPT_FILE, get_tuned_variables(), ignore_missing_vars=True)
     # 定义保存新模型的Saver。
     saver = tf.train.Saver()
@@ -209,7 +222,7 @@ def run1():
         # # 加载谷歌已经训练好的模型。
         print('Loading tuned variables from %s' % CKPT_FILE)
         load_fn(sess)
-        STEPS = 10000
+        STEPS = 1000000
         try:
             for i in range(STEPS):
                 trX, trY = sess.run([imgs, labels])
