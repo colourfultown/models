@@ -28,6 +28,7 @@ from official.resnet.keras import resnet_cifar_model
 from official.utils.flags import core as flags_core
 from official.utils.logs import logger
 from official.utils.misc import distribution_utils
+from official.utils.misc import keras_utils
 
 
 LR_SCHEDULE = [  # (multiplier, epoch to start) tuples
@@ -98,17 +99,7 @@ def run(flags_obj):
   Returns:
     Dictionary of training and eval stats.
   """
-  # TODO(tobyboyd): Remove eager flag when tf 1.0 testing ends.
-  # Eager is default in tf 2.0 and should not be toggled
-  if keras_common.is_v2_0():
-    keras_common.set_config_v2()
-  else:
-    config = keras_common.get_config_proto_v1()
-    if flags_obj.enable_eager:
-      tf.compat.v1.enable_eager_execution(config=config)
-    else:
-      sess = tf.Session(config=config)
-      tf.keras.backend.set_session(sess)
+  keras_utils.set_session_config(enable_eager=flags_obj.enable_eager)
 
   dtype = flags_core.get_tf_dtype(flags_obj)
   if dtype == 'fp16':
@@ -125,7 +116,7 @@ def run(flags_obj):
       distribution_strategy=flags_obj.distribution_strategy,
       num_gpus=flags_obj.num_gpus)
 
-  strategy_scope = keras_common.get_strategy_scope(strategy)
+  strategy_scope = distribution_utils.get_strategy_scope(strategy)
 
   if flags_obj.use_synthetic_data:
     distribution_utils.set_up_synthetic_data()
@@ -159,9 +150,10 @@ def run(flags_obj):
 
     model.compile(loss='categorical_crossentropy',
                   optimizer=optimizer,
+                  run_eagerly=flags_obj.run_eagerly,
                   metrics=['categorical_accuracy'])
 
-  time_callback, tensorboard_callback, lr_callback = keras_common.get_callbacks(
+  callbacks = keras_common.get_callbacks(
       learning_rate_schedule, cifar_main.NUM_IMAGES['train'])
 
   train_steps = cifar_main.NUM_IMAGES['train'] // flags_obj.batch_size
@@ -180,10 +172,6 @@ def run(flags_obj):
     num_eval_steps = None
     validation_data = None
 
-  callbacks = [time_callback, lr_callback]
-  if flags_obj.enable_tensorboard:
-    callbacks.append(tensorboard_callback)
-
   history = model.fit(train_input_dataset,
                       epochs=train_epochs,
                       steps_per_epoch=train_steps,
@@ -197,7 +185,7 @@ def run(flags_obj):
     eval_output = model.evaluate(eval_input_dataset,
                                  steps=num_eval_steps,
                                  verbose=2)
-  stats = keras_common.build_stats(history, eval_output, time_callback)
+  stats = keras_common.build_stats(history, eval_output, callbacks)
   return stats
 
 

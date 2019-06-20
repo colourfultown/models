@@ -93,7 +93,7 @@ def preprocess_image(image, is_training):
   """Preprocess a single image of layout [height, width, depth]."""
   if is_training:
     # Resize the image to add four extra pixels on each side.
-    image = tf.image.resize_image_with_crop_or_pad(
+    image = tf.image.resize_with_crop_or_pad(
         image, HEIGHT + 8, WIDTH + 8)
 
     # Randomly crop a [HEIGHT, WIDTH] section of the image.
@@ -113,7 +113,6 @@ def input_fn(is_training,
              num_epochs=1,
              dtype=tf.float32,
              datasets_num_private_threads=None,
-             num_parallel_batches=1,
              parse_record_fn=parse_record,
              input_context=None):
   """Input function which provides batches for train or eval.
@@ -125,7 +124,6 @@ def input_fn(is_training,
     num_epochs: The number of epochs to repeat the dataset.
     dtype: Data type to use for images/features
     datasets_num_private_threads: Number of private threads for tf.data.
-    num_parallel_batches: Number of parallel batches for tf.data.
     parse_record_fn: Function to use for parsing the records.
     input_context: A `tf.distribute.InputContext` object passed in by
       `tf.distribute.Strategy`.
@@ -151,8 +149,7 @@ def input_fn(is_training,
       parse_record_fn=parse_record_fn,
       num_epochs=num_epochs,
       dtype=dtype,
-      datasets_num_private_threads=datasets_num_private_threads,
-      num_parallel_batches=num_parallel_batches
+      datasets_num_private_threads=datasets_num_private_threads
   )
 
 
@@ -212,9 +209,9 @@ def cifar10_model_fn(features, labels, mode, params):
   features = tf.reshape(features, [-1, HEIGHT, WIDTH, NUM_CHANNELS])
   # Learning rate schedule follows arXiv:1512.03385 for ResNet-56 and under.
   learning_rate_fn = resnet_run_loop.learning_rate_with_decay(
-      batch_size=params['batch_size'], batch_denom=128,
-      num_images=NUM_IMAGES['train'], boundary_epochs=[91, 136, 182],
-      decay_rates=[1, 0.1, 0.01, 0.001])
+      batch_size=params['batch_size'] * params.get('num_workers', 1),
+      batch_denom=128, num_images=NUM_IMAGES['train'],
+      boundary_epochs=[91, 136, 182], decay_rates=[1, 0.1, 0.01, 0.001])
 
   # Weight decay of 2e-4 diverges from 1e-4 decay used in the ResNet paper
   # and seems more stable in testing. The difference was nominal for ResNet-56.
